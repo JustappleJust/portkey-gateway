@@ -751,6 +751,10 @@ export const googleTools = [
   'computer_use',
   'googleMaps',
   'google_maps',
+  'codeExecution',
+  'code_execution',
+  'urlContext',
+  'url_context',
 ];
 
 export const transformGoogleTools = (tool: Tool) => {
@@ -785,6 +789,14 @@ export const transformGoogleTools = (tool: Tool) => {
       googleMaps: {
         enableWidget: tool.function.parameters?.enableWidget,
       },
+    });
+  } else if (['codeExecution', 'code_execution'].includes(tool.function.name)) {
+    tools.push({
+      codeExecution: {},
+    });
+  } else if (['urlContext', 'url_context'].includes(tool.function.name)) {
+    tools.push({
+      urlContext: {},
     });
   }
   return tools;
