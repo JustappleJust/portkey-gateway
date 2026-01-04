@@ -178,7 +178,17 @@ export const VertexGoogleChatCompleteConfig: ProviderConfig = {
                                     return;
                                 }
 
-                                // Handle base64-encoded video data URLs
+                                // Helper to detect YouTube URLs
+                                const isYouTubeUrl = (
+                                    videoUrl: string,
+                                ): boolean => {
+                                    return (
+                                        videoUrl.includes("youtube.com") ||
+                                        videoUrl.includes("youtu.be")
+                                    );
+                                };
+
+                                // Example: data:video/mp4;base64,abcdefg...
                                 if (url.startsWith("data:")) {
                                     const [mimeTypeWithPrefix, base64Video] =
                                         url.split(";base64,");
@@ -191,27 +201,20 @@ export const VertexGoogleChatCompleteConfig: ProviderConfig = {
                                             data: base64Video,
                                         },
                                     });
-
-                                    return;
+                                } else {
+                                    // For URLs (gs://, https://, http://, YouTube)
+                                    const mimeType =
+                                        passedMimeType ||
+                                        (isYouTubeUrl(url)
+                                            ? "video/mp4"
+                                            : getMimeType(url));
+                                    parts.push({
+                                        fileData: {
+                                            mimeType: mimeType,
+                                            fileUri: url,
+                                        },
+                                    });
                                 }
-
-                                // Handle video URLs (including YouTube)
-                                // Auto-detect YouTube URLs and set appropriate mime_type
-                                const isYouTube =
-                                    url.includes("youtube.com") ||
-                                    url.includes("youtu.be");
-                                const mimeType =
-                                    passedMimeType ||
-                                    (isYouTube
-                                        ? "video/mp4"
-                                        : getMimeType(url));
-
-                                parts.push({
-                                    fileData: {
-                                        mimeType: mimeType,
-                                        fileUri: url,
-                                    },
-                                });
                             }
                         });
                     } else if (typeof message.content === "string") {
@@ -342,7 +345,7 @@ export const VertexGoogleChatCompleteConfig: ProviderConfig = {
             const functionDeclarations: any = [];
             const tools: any = [];
             params.tools?.forEach((tool) => {
-                if (tool.type === "function") {
+                if (tool.type === "function" && tool.function) {
                     // these are not supported by google
                     recursivelyDeleteUnsupportedParameters(
                         tool.function?.parameters,
@@ -363,8 +366,23 @@ export const VertexGoogleChatCompleteConfig: ProviderConfig = {
     },
     tool_choice: {
         param: "tool_config",
-        default: "",
+        default: (params: Params) => {
+            const toolConfig = {} as GoogleToolConfig;
+            const googleMapsTool = params.tools?.find(
+                (tool) =>
+                    tool.function?.name === "googleMaps" ||
+                    tool.function?.name === "google_maps",
+            );
+            if (googleMapsTool) {
+                toolConfig.retrievalConfig =
+                    googleMapsTool.function?.parameters?.retrievalConfig;
+                return toolConfig;
+            }
+            return;
+        },
+        required: true,
         transform: (params: Params) => {
+            const toolConfig = {} as GoogleToolConfig;
             if (params.tool_choice) {
                 const allowedFunctionNames: string[] = [];
                 if (
@@ -373,10 +391,8 @@ export const VertexGoogleChatCompleteConfig: ProviderConfig = {
                 ) {
                     allowedFunctionNames.push(params.tool_choice.function.name);
                 }
-                const toolConfig: GoogleToolConfig = {
-                    function_calling_config: {
-                        mode: transformToolChoiceForGemini(params.tool_choice),
-                    },
+                toolConfig.function_calling_config = {
+                    mode: transformToolChoiceForGemini(params.tool_choice),
                 };
                 if (allowedFunctionNames.length > 0) {
                     toolConfig.function_calling_config.allowed_function_names =
@@ -384,6 +400,16 @@ export const VertexGoogleChatCompleteConfig: ProviderConfig = {
                 }
                 return toolConfig;
             }
+            const googleMapsTool = params.tools?.find(
+                (tool) =>
+                    tool.function?.name === "googleMaps" ||
+                    tool.function?.name === "google_maps",
+            );
+            if (googleMapsTool) {
+                toolConfig.retrievalConfig =
+                    googleMapsTool.function?.parameters?.retrievalConfig;
+            }
+            return toolConfig;
         },
     },
     labels: {
@@ -398,6 +424,10 @@ export const VertexGoogleChatCompleteConfig: ProviderConfig = {
         transform: (params: Params) => transformGenerationConfig(params),
     },
     seed: {
+        param: "generationConfig",
+        transform: (params: Params) => transformGenerationConfig(params),
+    },
+    reasoning_effort: {
         param: "generationConfig",
         transform: (params: Params) => transformGenerationConfig(params),
     },
@@ -552,7 +582,9 @@ export const GoogleChatCompleteResponseTransform: (
                                     thinking: part.text,
                                 });
                             } else {
-                                content = part.text;
+                                content = content
+                                    ? content + part.text
+                                    : part.text;
                                 contentBlocks.push({
                                     type: "text",
                                     text: part.text,
@@ -608,7 +640,7 @@ export const GoogleChatCompleteResponseTransform: (
                 }) ?? [],
             usage: {
                 prompt_tokens: promptTokenCount,
-                completion_tokens: candidatesTokenCount + thoughtsTokenCount,
+                completion_tokens: candidatesTokenCount,
                 total_tokens: totalTokenCount,
                 completion_tokens_details: {
                     reasoning_tokens: thoughtsTokenCount,
@@ -676,6 +708,10 @@ export const VertexLlamaChatCompleteConfig: ProviderConfig = {
         param: "stream",
         default: false,
     },
+    image_config: {
+        param: "generationConfig",
+        transform: (params: Params) => transformGenerationConfig(params),
+    },
 };
 
 export const GoogleChatCompleteStreamChunkTransform: (
@@ -706,9 +742,7 @@ export const GoogleChatCompleteStreamChunkTransform: (
     if (parsedChunk.usageMetadata) {
         usageMetadata = {
             prompt_tokens: parsedChunk.usageMetadata.promptTokenCount,
-            completion_tokens:
-                parsedChunk.usageMetadata.candidatesTokenCount +
-                (parsedChunk.usageMetadata.thoughtsTokenCount ?? 0),
+            completion_tokens: parsedChunk.usageMetadata.candidatesTokenCount,
             total_tokens: parsedChunk.usageMetadata.totalTokenCount,
             completion_tokens_details: {
                 reasoning_tokens:
@@ -766,7 +800,7 @@ export const GoogleChatCompleteStreamChunkTransform: (
                             });
                             streamState.containsChainOfThoughtMessage = true;
                         } else {
-                            content = part.text ?? "";
+                            content += part.text ?? "";
                             contentBlocks.push({
                                 index: streamState.containsChainOfThoughtMessage
                                     ? 1
